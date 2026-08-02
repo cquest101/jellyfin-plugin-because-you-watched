@@ -49,6 +49,14 @@
                     </label>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="EnableStandalonePlaylist" />
+                        <span>Build a standalone "Because You Watched" playlist per user</span>
+                    </label>
+                    <div class="fieldDescription">Works with no other plugins installed. A scheduled task refreshes each user's playlist. Turn off if you only want the Home Screen Sections row.</div>
+                </div>
+
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -72,6 +80,7 @@
                     document.querySelector('#SeedCount').value = config.SeedCount;
                     document.querySelector('#MinItemsPerRow').value = config.MinItemsPerRow;
                     document.querySelector('#HideWatched').checked = config.HideWatched;
+                    document.querySelector('#EnableStandalonePlaylist').checked = config.EnableStandalonePlaylist;
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -86,6 +95,7 @@
                     config.SeedCount = parseInt(document.querySelector('#SeedCount').value, 10);
                     config.MinItemsPerRow = parseInt(document.querySelector('#MinItemsPerRow').value, 10);
                     config.HideWatched = document.querySelector('#HideWatched').checked;
+                    config.EnableStandalonePlaylist = document.querySelector('#EnableStandalonePlaylist').checked;
                     ApiClient.updatePluginConfiguration(BecauseYouWatchedConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

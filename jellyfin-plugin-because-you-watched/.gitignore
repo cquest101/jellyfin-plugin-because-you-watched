@@ -1,8 +1,0 @@
-bin/
-obj/
-artifact/
-*.zip
-*.user
-.vs/
-.idea/
-*.DotSettings.user
