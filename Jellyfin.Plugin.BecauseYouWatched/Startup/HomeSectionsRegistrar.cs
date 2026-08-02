@@ -113,10 +113,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Startup
         {
             PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
+            // Unique id: "BecauseYouWatched" is the id of Home Screen Sections' own built-in
+            // (weak) section, and colliding with it makes their translation layer stamp an
+            // unfilled "{0}" template over the row title. Same reason the title swaps normal
+            // spaces for non-breaking ones: their translator also matches display text with
+            // spaces stripped, and "BecauseYouWatched" is a translation key. NBSP renders
+            // identically but doesn't match.
+            string title = string.IsNullOrWhiteSpace(config.RowTitle) ? "Because You Watched" : config.RowTitle;
+
             Dictionary<string, object?> payload = new Dictionary<string, object?>
             {
-                ["id"] = "BecauseYouWatched",
-                ["displayText"] = config.RowTitle,
+                ["id"] = "BecauseYouWatchedFixed",
+                ["displayText"] = title.Replace(' ', ' '),
                 ["limit"] = 1,
                 ["route"] = "movies",
                 ["additionalData"] = "movies",
