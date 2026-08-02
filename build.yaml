@@ -1,0 +1,22 @@
+---
+name: "Because You Watched"
+guid: "6c784ca1-2a6f-4132-af78-405582869670"
+version: "1.0.0.0"
+targetAbi: "10.11.0.0"
+framework: "net8.0"
+owner: "chris"
+overview: "Real 'Because You Watched' recommendations that actually match what you watched."
+category: "General"
+description: >
+  Jellyfin's built-in recommendations endpoint is broken: the "Because you watched X"
+  row returns the same alphabetical list of your library for every title. This plugin
+  replaces it with real, similarity-scored picks built off what you actually watched,
+  using Jellyfin's own working similarity engine (the one behind /Items/Similar). It
+  blends your recent watches, hides what you've already seen, and backfills thin
+  results so a row is never a single weak pick. The row renders through the Home Screen
+  Sections plugin.
+artifacts:
+  - "Jellyfin.Plugin.BecauseYouWatched.dll"
+changelog: >
+  1.0.0.0 - Initial release. Real similarity-based "Because You Watched" row,
+  multi-seed blending, watched-item filtering, and same-genre backfill.

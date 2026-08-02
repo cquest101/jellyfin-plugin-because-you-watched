@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Because You Watched</title>
+</head>
+<body>
+<div id="BecauseYouWatchedConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+     data-require="emby-input,emby-button,emby-checkbox">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="BecauseYouWatchedConfigForm">
+                <div class="verticalSection">
+                    <h2>Because You Watched</h2>
+                    <p class="fieldDescription">
+                        Real recommendations built from what you actually watched, using Jellyfin's working
+                        similarity engine instead of the broken recommendations endpoint. The row renders
+                        through the <strong>Home Screen Sections</strong> plugin, which must be installed.
+                    </p>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RowTitle">Row title</label>
+                    <input is="emby-input" type="text" id="RowTitle" />
+                    <div class="fieldDescription">Heading shown above the row on the home screen.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MaxItems">Items in the row</label>
+                    <input is="emby-input" type="number" id="MaxItems" min="1" max="60" />
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="SeedCount">Recent watches to blend</label>
+                    <input is="emby-input" type="number" id="SeedCount" min="1" max="10" />
+                    <div class="fieldDescription">1 is classic single-title "because you watched"; higher blends your last few.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MinItemsPerRow">Backfill floor</label>
+                    <input is="emby-input" type="number" id="MinItemsPerRow" min="0" max="30" />
+                    <div class="fieldDescription">If similarity comes back thinner than this, fill with same-genre picks so the row is never one weak result.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="HideWatched" />
+                        <span>Hide items I've already watched</span>
+                    </label>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="EnableStandalonePlaylist" />
+                        <span>Build a standalone "Because You Watched" playlist per user</span>
+                    </label>
+                    <div class="fieldDescription">Works with no other plugins installed. A scheduled task refreshes each user's playlist. Turn off if you only want the Home Screen Sections row.</div>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        var BecauseYouWatchedConfig = {
+            pluginUniqueId: '6c784ca1-2a6f-4132-af78-405582869670'
+        };
+
+        document.querySelector('#BecauseYouWatchedConfigPage')
+            .addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(BecauseYouWatchedConfig.pluginUniqueId).then(function (config) {
+                    document.querySelector('#RowTitle').value = config.RowTitle;
+                    document.querySelector('#MaxItems').value = config.MaxItems;
+                    document.querySelector('#SeedCount').value = config.SeedCount;
+                    document.querySelector('#MinItemsPerRow').value = config.MinItemsPerRow;
+                    document.querySelector('#HideWatched').checked = config.HideWatched;
+                    document.querySelector('#EnableStandalonePlaylist').checked = config.EnableStandalonePlaylist;
+                    Dashboard.hideLoadingMsg();
+                });
+            });
+
+        document.querySelector('#BecauseYouWatchedConfigForm')
+            .addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(BecauseYouWatchedConfig.pluginUniqueId).then(function (config) {
+                    config.RowTitle = document.querySelector('#RowTitle').value;
+                    config.MaxItems = parseInt(document.querySelector('#MaxItems').value, 10);
+                    config.SeedCount = parseInt(document.querySelector('#SeedCount').value, 10);
+                    config.MinItemsPerRow = parseInt(document.querySelector('#MinItemsPerRow').value, 10);
+                    config.HideWatched = document.querySelector('#HideWatched').checked;
+                    config.EnableStandalonePlaylist = document.querySelector('#EnableStandalonePlaylist').checked;
+                    ApiClient.updatePluginConfiguration(BecauseYouWatchedConfig.pluginUniqueId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+                return false;
+            });
+    </script>
+</div>
+</body>
+</html>
