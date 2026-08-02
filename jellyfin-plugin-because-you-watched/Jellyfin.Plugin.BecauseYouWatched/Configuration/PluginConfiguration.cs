@@ -17,14 +17,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Configuration
             SeedCount = 3;
             HideWatched = true;
             MinItemsPerRow = 5;
-            EnableStandalonePlaylist = true;
         }
-
-        /// <summary>
-        /// Gets or sets a value indicating whether the scheduled task builds a per-user
-        /// "Because You Watched" playlist, so the plugin works with no other plugins installed.
-        /// </summary>
-        public bool EnableStandalonePlaylist { get; set; }
 
         /// <summary>
         /// Gets or sets the title shown on the home row.

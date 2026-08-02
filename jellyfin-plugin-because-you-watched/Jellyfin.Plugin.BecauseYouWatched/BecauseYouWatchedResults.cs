@@ -1,64 +1,101 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Data.Entities;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.BecauseYouWatched.Configuration;
+using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
 
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
     /// <summary>
-    /// The brain, shared by the home-screen row and the standalone playlist task.
-    /// Builds recommendations from a user's recent watches using Jellyfin's own
-    /// similarity engine (SimilarTo, the engine behind /Items/Similar), blends several
-    /// recent seeds, hides watched items, and backfills thin results.
+    /// The brain. Builds a real "Because You Watched" row from the user's recent watches
+    /// using Jellyfin's own similarity engine (SimilarTo, the engine behind /Items/Similar),
+    /// blends several recent seeds, hides watched items, and backfills thin results.
+    ///
+    /// The Home Screen Sections plugin DI-constructs this class and calls GetResults via
+    /// reflection, so the only dependencies are Jellyfin core services.
     /// </summary>
-    public class RecommendationEngine
+    public class BecauseYouWatchedResults
     {
+        private readonly IUserManager _userManager;
         private readonly ILibraryManager _libraryManager;
+        private readonly IDtoService _dtoService;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="RecommendationEngine"/> class.
+        /// Initializes a new instance of the <see cref="BecauseYouWatchedResults"/> class.
         /// </summary>
-        public RecommendationEngine(ILibraryManager libraryManager)
+        public BecauseYouWatchedResults(
+            IUserManager userManager,
+            ILibraryManager libraryManager,
+            IDtoService dtoService)
         {
+            _userManager = userManager;
             _libraryManager = libraryManager;
+            _dtoService = dtoService;
         }
 
         /// <summary>
-        /// Produces the ranked recommendation list for a user.
+        /// Invoked by the Home Screen Sections plugin. Returns the row's items.
         /// </summary>
-        /// <param name="user">The user to build for.</param>
-        /// <param name="config">Plugin configuration.</param>
-        /// <returns>Ordered recommendations, capped to the configured size.</returns>
-        public IReadOnlyList<BaseItem> GetRecommendations(User user, PluginConfiguration config)
+        /// <param name="payload">The section payload (carries the user id).</param>
+        /// <returns>The recommendation row.</returns>
+        public QueryResult<BaseItemDto> GetResults(SectionPayload payload)
         {
+            User? user = _userManager.GetUserById(payload.UserId);
+            if (user is null)
+            {
+                return new QueryResult<BaseItemDto>();
+            }
+
+            PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
             int maxItems = Math.Max(1, config.MaxItems);
             int seedCount = Math.Max(1, config.SeedCount);
             bool? excludeWatched = config.HideWatched ? false : (bool?)null;
 
+            DtoOptions dtoOptions = new DtoOptions
+            {
+                Fields = new List<ItemFields>
+                {
+                    ItemFields.PrimaryImageAspectRatio,
+                    ItemFields.Path
+                },
+                ImageTypeLimit = 1,
+                ImageTypes = new List<ImageType>
+                {
+                    ImageType.Primary,
+                    ImageType.Thumb,
+                    ImageType.Backdrop
+                }
+            };
+
+            // 1. The user's most recently played movies become the seeds.
             IReadOnlyList<BaseItem> seeds = _libraryManager.GetItemList(new InternalItemsQuery(user)
             {
                 IncludeItemTypes = new[] { BaseItemKind.Movie },
                 IsPlayed = true,
                 OrderBy = new[] { (ItemSortBy.DatePlayed, SortOrder.Descending) },
                 Limit = seedCount,
-                Recursive = true
+                Recursive = true,
+                DtoOptions = dtoOptions
             });
 
             if (seeds.Count == 0)
             {
-                return Array.Empty<BaseItem>();
+                return new QueryResult<BaseItemDto>();
             }
 
             HashSet<Guid> seedIds = seeds.Select(s => s.Id).ToHashSet();
             Dictionary<Guid, double> scores = new Dictionary<Guid, double>();
             Dictionary<Guid, BaseItem> pool = new Dictionary<Guid, BaseItem>();
 
+            // 2. For each seed, pull Jellyfin's real similarity results and score by
+            //    seed recency (more recent seed weighs more) and rank within that seed.
             for (int s = 0; s < seeds.Count; s++)
             {
                 BaseItem seed = seeds[s];
@@ -70,7 +107,8 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     IncludeItemTypes = new[] { BaseItemKind.Movie },
                     IsPlayed = excludeWatched,
                     Limit = maxItems * 2,
-                    Recursive = true
+                    Recursive = true,
+                    DtoOptions = dtoOptions
                 });
 
                 for (int p = 0; p < similar.Count; p++)
@@ -81,7 +119,9 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                         continue;
                     }
 
-                    double add = seedWeight * (1.0 / (p + 1));
+                    double rankWeight = 1.0 / (p + 1);
+                    double add = seedWeight * rankWeight;
+
                     if (scores.TryGetValue(item.Id, out double existing))
                     {
                         scores[item.Id] = existing + add;
@@ -94,7 +134,8 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 }
             }
 
-            // Backfill from shared genres so a row is never a single weak pick.
+            // 3. Backfill from shared genres if similarity came back thin, so a row is
+            //    never a single weak pick (the gap the stock engine and other plugins leave).
             if (pool.Count < Math.Max(config.MinItemsPerRow, 1))
             {
                 string[] genres = seeds
@@ -115,7 +156,8 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                         IsPlayed = excludeWatched,
                         OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
                         Limit = maxItems * 2,
-                        Recursive = true
+                        Recursive = true,
+                        DtoOptions = dtoOptions
                     });
 
                     foreach (BaseItem item in backfill)
@@ -125,17 +167,25 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                             continue;
                         }
 
+                        // Backfill sits below any real similarity hit.
                         scores[item.Id] = 0.0001;
                         pool[item.Id] = item;
                     }
                 }
             }
 
-            return scores
+            // 4. Rank, cap, and hand back DTOs.
+            List<BaseItem> ordered = scores
                 .OrderByDescending(kv => kv.Value)
                 .Select(kv => pool[kv.Key])
                 .Take(maxItems)
                 .ToList();
+
+            BaseItemDto[] dtos = ordered
+                .Select(i => _dtoService.GetBaseItemDto(i, dtoOptions, user))
+                .ToArray();
+
+            return new QueryResult<BaseItemDto>(dtos);
         }
     }
 }
