@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
-using Jellyfin.Data.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.BecauseYouWatched.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;

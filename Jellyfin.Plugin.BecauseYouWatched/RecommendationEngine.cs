@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Jellyfin.Data.Entities;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.BecauseYouWatched.Configuration;
 using MediaBrowser.Controller.Entities;
