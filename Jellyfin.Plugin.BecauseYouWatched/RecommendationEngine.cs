@@ -43,6 +43,11 @@ namespace Jellyfin.Plugin.BecauseYouWatched
 
             Dictionary<Guid, BaseItem> pool = new Dictionary<Guid, BaseItem>();
 
+            // IMPORTANT: this query mirrors the server's own /Items/Similar endpoint
+            // field-for-field. Adding Recursive/IsPlayed to it silently DISABLES the
+            // genre/tag filtering on 10.11 and you get top-rated-anything back (the
+            // exact failure mode of home-sections issue #243). Watched-filtering and
+            // ranking are done in code below instead.
             if (seed.Genres.Length > 0 || seed.Tags.Length > 0)
             {
                 IReadOnlyList<BaseItem> similar = _libraryManager.GetItemList(new InternalItemsQuery(user)
@@ -50,16 +55,16 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     Genres = seed.Genres,
                     Tags = seed.Tags,
                     IncludeItemTypes = new[] { BaseItemKind.Movie },
-                    IsPlayed = excludeWatched,
+                    EnableTotalRecordCount = false,
+                    EnableGroupByMetadataKey = true,
                     ExcludeItemIds = new[] { seed.Id },
-                    OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
-                    Limit = maxItems * 2,
-                    Recursive = true
+                    OrderBy = new[] { (ItemSortBy.Random, SortOrder.Ascending) },
+                    Limit = maxItems * 4
                 });
 
                 foreach (BaseItem item in similar)
                 {
-                    if (item.Id != seed.Id)
+                    if (Keep(item, seed, user, excludeWatched))
                     {
                         pool[item.Id] = item;
                     }
@@ -73,15 +78,16 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 {
                     Genres = seed.Genres,
                     IncludeItemTypes = new[] { BaseItemKind.Movie },
-                    IsPlayed = excludeWatched,
-                    OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
-                    Limit = maxItems * 2,
-                    Recursive = true
+                    EnableTotalRecordCount = false,
+                    EnableGroupByMetadataKey = true,
+                    ExcludeItemIds = new[] { seed.Id },
+                    OrderBy = new[] { (ItemSortBy.Random, SortOrder.Ascending) },
+                    Limit = maxItems * 4
                 });
 
                 foreach (BaseItem item in backfill)
                 {
-                    if (item.Id != seed.Id && !pool.ContainsKey(item.Id))
+                    if (!pool.ContainsKey(item.Id) && Keep(item, seed, user, excludeWatched))
                     {
                         pool[item.Id] = item;
                     }
@@ -92,6 +98,31 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 .OrderByDescending(i => i.CommunityRating ?? 0)
                 .Take(maxItems)
                 .ToList();
+        }
+
+        private static bool Keep(BaseItem item, BaseItem seed, User user, bool? excludeWatched)
+        {
+            if (item.Id == seed.Id)
+            {
+                return false;
+            }
+
+            if (excludeWatched == false)
+            {
+                try
+                {
+                    if (item.IsPlayed(user, null!))
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception)
+                {
+                    // If user data can't be read, keep the item rather than drop it.
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
