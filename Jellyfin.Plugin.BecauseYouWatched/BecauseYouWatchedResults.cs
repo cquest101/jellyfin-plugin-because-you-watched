@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Database.Implementations.Entities;
@@ -12,9 +13,11 @@ using MediaBrowser.Model.Querying;
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
     /// <summary>
-    /// Results provider for the Home Screen Sections rail. That plugin DI-constructs this
+    /// Results provider for the Home Screen Sections rows. That plugin DI-constructs this
     /// class and calls <see cref="GetResults"/> via reflection, so it depends only on
-    /// Jellyfin core services.
+    /// Jellyfin core services. When the section payload carries a movie id in
+    /// AdditionalData (the per-movie "Because You Watched X" rows), results are similar to
+    /// THAT movie; otherwise it falls back to the blended row.
     /// </summary>
     public class BecauseYouWatchedResults
     {
@@ -38,7 +41,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         /// <summary>
         /// Invoked by the Home Screen Sections plugin. Returns the row's items.
         /// </summary>
-        /// <param name="payload">The section payload (carries the user id).</param>
+        /// <param name="payload">The section payload (user id + optional seed movie id).</param>
         /// <returns>The recommendation row.</returns>
         public QueryResult<BaseItemDto> GetResults(SectionPayload payload)
         {
@@ -49,6 +52,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             }
 
             PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+            RecommendationEngine engine = new RecommendationEngine(_libraryManager);
+
+            IReadOnlyList<BaseItem> items;
+            if (Guid.TryParse(payload.AdditionalData, out Guid seedId)
+                && _libraryManager.GetItemById(seedId) is BaseItem seed)
+            {
+                items = engine.GetSimilarTo(user, seed, config);
+            }
+            else
+            {
+                items = engine.GetRecommendations(user, config);
+            }
 
             DtoOptions dtoOptions = new DtoOptions
             {
@@ -65,8 +80,6 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     ImageType.Backdrop
                 }
             };
-
-            IReadOnlyList<BaseItem> items = new RecommendationEngine(_libraryManager).GetRecommendations(user, config);
 
             BaseItemDto[] dtos = items
                 .Select(i => _dtoService.GetBaseItemDto(i, dtoOptions, user))

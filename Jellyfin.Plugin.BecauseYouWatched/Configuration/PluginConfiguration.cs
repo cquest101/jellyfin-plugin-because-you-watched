@@ -18,7 +18,14 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Configuration
             HideWatched = true;
             MinItemsPerRow = 5;
             EnableStandalonePlaylist = true;
+            PrimaryUserName = string.Empty;
         }
+
+        /// <summary>
+        /// Gets or sets the user whose watch history names the per-movie home rows.
+        /// Blank = automatic (the user with the most recent movie play).
+        /// </summary>
+        public string PrimaryUserName { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the scheduled task builds a per-user

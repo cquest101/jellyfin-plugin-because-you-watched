@@ -13,7 +13,7 @@ env:
   DLL_NAME: Jellyfin.Plugin.BecauseYouWatched.dll
   GUID: 6c784ca1-2a6f-4132-af78-405582869670
   TARGET_ABI: 10.11.0.0
-  VERSION: 1.0.1.0
+  VERSION: 1.1.0.0
 
 jobs:
   build:
@@ -91,11 +91,11 @@ jobs:
           URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.package.outputs.zip }}"
           MD5="${{ steps.package.outputs.md5 }}"
           TS=$(date -u +%Y-%m-%dT%H:%M:%S.0000000Z)
-          python3 - "$URL" "$MD5" "$TS" "$VERSION" <<'PY'
+          python3 - "$URL" "$MD5" "$TS" <<'PY'
           import json, sys
-          url, md5, ts, ver = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+          url, md5, ts = sys.argv[1], sys.argv[2], sys.argv[3]
           d = json.load(open('manifest.json'))
-          d[0]['versions'][0].update(version=ver, sourceUrl=url, checksum=md5, timestamp=ts)
+          d[0]['versions'][0].update(sourceUrl=url, checksum=md5, timestamp=ts)
           json.dump(d, open('manifest.json', 'w'), indent=4)
           PY
           git add manifest.json

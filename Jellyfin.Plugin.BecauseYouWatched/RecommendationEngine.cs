@@ -11,11 +11,11 @@ using MediaBrowser.Controller.Library;
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
     /// <summary>
-    /// The brain, shared by the home-screen row and the standalone playlist task.
-    /// Builds recommendations from a user's recent watches using the same matching the
-    /// server's own /Items/Similar endpoint uses in 10.11 (shared genres and tags),
-    /// blended across several recent seeds, with watched items hidden and thin results
-    /// backfilled by top-rated same-genre picks.
+    /// The brain, shared by the home-screen rows and the standalone playlist task.
+    /// Single-seed mode powers the per-movie "Because You Watched X" rows; blended mode
+    /// powers the playlist. Both use the same matching the server's /Items/Similar endpoint
+    /// uses in 10.11 (shared genres and tags), ranked deterministically instead of shuffled,
+    /// with watched items hidden and thin results backfilled by top-rated same-genre picks.
     /// </summary>
     public class RecommendationEngine
     {
@@ -30,7 +30,90 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         }
 
         /// <summary>
-        /// Produces the ranked recommendation list for a user.
+        /// Recommendations similar to ONE specific movie: the per-row brain.
+        /// </summary>
+        /// <param name="user">The user the row is for (watched-filtering is per user).</param>
+        /// <param name="seed">The movie the row is named after.</param>
+        /// <param name="config">Plugin configuration.</param>
+        /// <returns>Ranked similar movies, capped to the configured row size.</returns>
+        public IReadOnlyList<BaseItem> GetSimilarTo(User user, BaseItem seed, PluginConfiguration config)
+        {
+            int maxItems = Math.Max(1, config.MaxItems);
+            bool? excludeWatched = config.HideWatched ? false : (bool?)null;
+
+            Dictionary<Guid, BaseItem> pool = new Dictionary<Guid, BaseItem>();
+
+            if (seed.Genres.Length > 0 || seed.Tags.Length > 0)
+            {
+                IReadOnlyList<BaseItem> similar = _libraryManager.GetItemList(new InternalItemsQuery(user)
+                {
+                    Genres = seed.Genres,
+                    Tags = seed.Tags,
+                    IncludeItemTypes = new[] { BaseItemKind.Movie },
+                    IsPlayed = excludeWatched,
+                    ExcludeItemIds = new[] { seed.Id },
+                    OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
+                    Limit = maxItems * 2,
+                    Recursive = true
+                });
+
+                foreach (BaseItem item in similar)
+                {
+                    if (item.Id != seed.Id)
+                    {
+                        pool[item.Id] = item;
+                    }
+                }
+            }
+
+            // Genre-only backfill so the row is never one weak pick.
+            if (pool.Count < Math.Max(config.MinItemsPerRow, 1) && seed.Genres.Length > 0)
+            {
+                IReadOnlyList<BaseItem> backfill = _libraryManager.GetItemList(new InternalItemsQuery(user)
+                {
+                    Genres = seed.Genres,
+                    IncludeItemTypes = new[] { BaseItemKind.Movie },
+                    IsPlayed = excludeWatched,
+                    OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
+                    Limit = maxItems * 2,
+                    Recursive = true
+                });
+
+                foreach (BaseItem item in backfill)
+                {
+                    if (item.Id != seed.Id && !pool.ContainsKey(item.Id))
+                    {
+                        pool[item.Id] = item;
+                    }
+                }
+            }
+
+            return pool.Values
+                .OrderByDescending(i => i.CommunityRating ?? 0)
+                .Take(maxItems)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The user's most recently played movies, newest first: the row seeds.
+        /// </summary>
+        /// <param name="user">The user.</param>
+        /// <param name="count">How many seeds.</param>
+        /// <returns>Recently played movies.</returns>
+        public IReadOnlyList<BaseItem> GetRecentSeeds(User user, int count)
+        {
+            return _libraryManager.GetItemList(new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Movie },
+                IsPlayed = true,
+                OrderBy = new[] { (ItemSortBy.DatePlayed, SortOrder.Descending) },
+                Limit = Math.Max(1, count),
+                Recursive = true
+            });
+        }
+
+        /// <summary>
+        /// Blended multi-seed recommendations: powers the standalone playlist.
         /// </summary>
         /// <param name="user">The user to build for.</param>
         /// <param name="config">Plugin configuration.</param>
@@ -38,18 +121,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         public IReadOnlyList<BaseItem> GetRecommendations(User user, PluginConfiguration config)
         {
             int maxItems = Math.Max(1, config.MaxItems);
-            int seedCount = Math.Max(1, config.SeedCount);
-            bool? excludeWatched = config.HideWatched ? false : (bool?)null;
-
-            IReadOnlyList<BaseItem> seeds = _libraryManager.GetItemList(new InternalItemsQuery(user)
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Movie },
-                IsPlayed = true,
-                OrderBy = new[] { (ItemSortBy.DatePlayed, SortOrder.Descending) },
-                Limit = seedCount,
-                Recursive = true
-            });
-
+            IReadOnlyList<BaseItem> seeds = GetRecentSeeds(user, Math.Max(1, config.SeedCount));
             if (seeds.Count == 0)
             {
                 return Array.Empty<BaseItem>();
@@ -59,31 +131,10 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             Dictionary<Guid, double> scores = new Dictionary<Guid, double>();
             Dictionary<Guid, BaseItem> pool = new Dictionary<Guid, BaseItem>();
 
-            // Same matching the server's /Items/Similar endpoint uses in 10.11:
-            // candidates sharing the seed's genres/tags. Items that match multiple
-            // recent seeds accumulate score, weighted toward the most recent seed.
             for (int s = 0; s < seeds.Count; s++)
             {
-                BaseItem seed = seeds[s];
-                if (seed.Genres.Length == 0 && seed.Tags.Length == 0)
-                {
-                    continue;
-                }
-
                 double seedWeight = 1.0 / (s + 1);
-
-                IReadOnlyList<BaseItem> similar = _libraryManager.GetItemList(new InternalItemsQuery(user)
-                {
-                    Genres = seed.Genres,
-                    Tags = seed.Tags,
-                    IncludeItemTypes = new[] { BaseItemKind.Movie },
-                    IsPlayed = excludeWatched,
-                    ExcludeItemIds = new[] { seed.Id },
-                    Limit = maxItems * 2,
-                    Recursive = true
-                });
-
-                foreach (BaseItem item in similar)
+                foreach (BaseItem item in GetSimilarTo(user, seeds[s], config))
                 {
                     if (seedIds.Contains(item.Id))
                     {
@@ -97,43 +148,6 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     else
                     {
                         scores[item.Id] = seedWeight;
-                        pool[item.Id] = item;
-                    }
-                }
-            }
-
-            // Backfill from shared genres so a row is never a single weak pick.
-            if (pool.Count < Math.Max(config.MinItemsPerRow, 1))
-            {
-                string[] genres = seeds
-                    .SelectMany(x => x.Genres)
-                    .Where(g => !string.IsNullOrWhiteSpace(g))
-                    .GroupBy(g => g, StringComparer.OrdinalIgnoreCase)
-                    .OrderByDescending(g => g.Count())
-                    .Select(g => g.Key)
-                    .Take(3)
-                    .ToArray();
-
-                if (genres.Length > 0)
-                {
-                    IReadOnlyList<BaseItem> backfill = _libraryManager.GetItemList(new InternalItemsQuery(user)
-                    {
-                        IncludeItemTypes = new[] { BaseItemKind.Movie },
-                        Genres = genres,
-                        IsPlayed = excludeWatched,
-                        OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
-                        Limit = maxItems * 2,
-                        Recursive = true
-                    });
-
-                    foreach (BaseItem item in backfill)
-                    {
-                        if (seedIds.Contains(item.Id) || scores.ContainsKey(item.Id))
-                        {
-                            continue;
-                        }
-
-                        scores[item.Id] = 0.0001;
                         pool[item.Id] = item;
                     }
                 }
