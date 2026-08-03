@@ -102,6 +102,8 @@ The engine is only as good as your metadata. If a row looks off:
 | Home screen looks unchanged | Browser cache. Hard-refresh (Ctrl+Shift+R), or DevTools → Network → Disable cache → refresh. |
 | Rows lag behind what I just watched | Rows re-register every 15 minutes. Finish a movie, give it a few minutes. |
 | Playlist exists but no rows | You're in standalone mode; install the Home Screen Sections stack (step 2 above). |
+| A row is empty | The seed movie has no genre metadata, so nothing can pass the tone gate (the log says so too). Refresh that movie's metadata. |
+| Lowered "Recent watches" but old rows linger | Home Screen Sections has no unregister API, so dropping the row count takes effect after a Jellyfin restart. |
 
 ## How it works (for developers)
 

@@ -13,7 +13,7 @@ env:
   DLL_NAME: Jellyfin.Plugin.BecauseYouWatched.dll
   GUID: 6c784ca1-2a6f-4132-af78-405582869670
   TARGET_ABI: 10.11.0.0
-  VERSION: 1.1.5.0
+  VERSION: 1.1.6.0
 
 jobs:
   build:
@@ -22,6 +22,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      # On tag builds the git tag is the single source of truth for the version:
+      # v1.2.3.0 -> 1.2.3.0. The env VERSION above is only the fallback for
+      # untagged builds. This also flows into the DLL's assembly/file version,
+      # so a release can never ship a DLL reporting a stale version.
+      - name: Use tag as version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -32,7 +40,7 @@ jobs:
         run: dotnet restore Jellyfin.Plugin.BecauseYouWatched/Jellyfin.Plugin.BecauseYouWatched.csproj
 
       - name: Build (Release)
-        run: dotnet build Jellyfin.Plugin.BecauseYouWatched/Jellyfin.Plugin.BecauseYouWatched.csproj -c Release --no-restore
+        run: dotnet build Jellyfin.Plugin.BecauseYouWatched/Jellyfin.Plugin.BecauseYouWatched.csproj -c Release --no-restore -p:AssemblyVersion=$VERSION -p:FileVersion=$VERSION
 
       - name: Package plugin zip
         id: package

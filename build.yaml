@@ -1,7 +1,7 @@
 ---
 name: "Because You Watched"
 guid: "6c784ca1-2a6f-4132-af78-405582869670"
-version: "1.1.5.0"
+version: "1.1.6.0"
 targetAbi: "10.11.0.0"
 framework: "net9.0"
 owner: "cquest101"
@@ -21,7 +21,9 @@ description: >
 artifacts:
   - "Jellyfin.Plugin.BecauseYouWatched.dll"
 changelog: >
-  1.1.5.0 - Playlist safety: the standalone playlist is identified by a plugin
+  1.1.6.0 - Config changes take effect immediately (cache key includes settings).
+  A seed with no genre metadata now logs why its row is empty. Release version is
+  derived from the git tag in CI. 1.1.5.0 - Playlist safety: the standalone playlist is identified by a plugin
   marker tag, never by name, so an existing user playlist with the same name is
   never touched. Tone gate now also applies to backfill. Per-seed result cache.
   Watched-check failures are logged. 1.1.4.0 - Tone gate (zero shared genres =

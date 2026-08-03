@@ -91,15 +91,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         /// <returns>Ranked similar movies, capped to the configured row size.</returns>
         public IReadOnlyList<BaseItem> GetSimilarTo(User user, BaseItem seed, PluginConfiguration config)
         {
-            string cacheKey = $"{user.Id:N}|{seed.Id:N}";
+            int maxItems = Math.Max(1, config.MaxItems);
+            bool hideWatched = config.HideWatched;
+
+            // Config-affecting settings are part of the key, so changing a setting takes
+            // effect immediately instead of waiting out the TTL.
+            string cacheKey = $"{user.Id:N}|{seed.Id:N}|{maxItems}|{hideWatched}|{config.MinItemsPerRow}|{config.IgnoredTags}";
             if (Cache.TryGetValue(cacheKey, out (DateTime Built, IReadOnlyList<BaseItem> Items) hit)
                 && DateTime.UtcNow - hit.Built < CacheTtl)
             {
                 return hit.Items;
             }
 
-            int maxItems = Math.Max(1, config.MaxItems);
-            bool hideWatched = config.HideWatched;
             HashSet<string> ignored = BuildIgnoredTags(config);
 
             IReadOnlyList<BaseItem> pool = _libraryManager.GetItemList(new InternalItemsQuery(user)
@@ -132,6 +135,19 @@ namespace Jellyfin.Plugin.BecauseYouWatched
 
             double total = Math.Max(pool.Count, 1);
             HashSet<string> seedGenres = new HashSet<string>(seed.Genres, StringComparer.OrdinalIgnoreCase);
+
+            // A seed with no genre metadata can never pass the tone gate, so its row would
+            // be silently empty. Say so, so the user knows to refresh metadata.
+            if (seedGenres.Count == 0)
+            {
+                _logger?.LogWarning(
+                    "Because You Watched: \"{Seed}\" has no genre metadata, so its row will be empty. Refresh the movie's metadata to fix this.",
+                    seed.Name);
+                IReadOnlyList<BaseItem> empty = Array.Empty<BaseItem>();
+                Cache[cacheKey] = (DateTime.UtcNow, empty);
+                return empty;
+            }
+
             HashSet<string> seedTags = new HashSet<string>(
                 seed.Tags.Where(t => !ignored.Contains(t)), StringComparer.OrdinalIgnoreCase);
             int? seedYear = seed.ProductionYear;
