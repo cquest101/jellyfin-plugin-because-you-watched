@@ -19,7 +19,14 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Configuration
             MinItemsPerRow = 5;
             EnableStandalonePlaylist = true;
             PrimaryUserName = string.Empty;
+            IgnoredTags = string.Empty;
         }
+
+        /// <summary>
+        /// Gets or sets extra tags (comma-separated) to ignore when scoring similarity,
+        /// on top of the built-in mood/junk filter.
+        /// </summary>
+        public string IgnoredTags { get; set; }
 
         /// <summary>
         /// Gets or sets the user whose watch history names the per-movie home rows.

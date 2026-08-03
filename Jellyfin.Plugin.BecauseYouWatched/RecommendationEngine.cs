@@ -11,20 +11,50 @@ using MediaBrowser.Controller.Library;
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
     /// <summary>
-    /// The brain, shared by the home-screen rows and the standalone playlist task.
+    /// The brain. Ranks candidates for "Because You Watched X" the way a person who knows
+    /// film would, using four signals in order of strength:
     ///
-    /// Ranking is weighted-overlap, computed entirely in code (Jellyfin's query-level
-    /// genre/tag filters have inconsistent semantics across 10.11, so they are not
-    /// trusted for ranking):
-    ///  - sharing a RARE genre or tag with the seed scores high; sharing a huge genre
-    ///    (e.g. Action in an action-heavy library) scores low  (inverse-frequency weight)
-    ///  - matches stack: a movie sharing BOTH of a seed's genres beats one sharing one
-    ///  - community rating only breaks ties, it never drives the ranking
-    ///  - watched items are excluded, duplicate copies of the same movie are collapsed
+    ///  1. CONTENT TAGS (the subcategories: hood, gang, slasher, satire, simulation...)
+    ///     rarity-weighted and boosted; mood adjectives and metadata debris are filtered
+    ///     out first because "calm" and "playful" are feelings, not similarity.
+    ///  2. PEOPLE: a shared director or writer is a strong tie (the Hughes Brothers link
+    ///     Menace II Society to Dead Presidents; the Wachowskis link The Matrix to
+    ///     The Animatrix and V for Vendetta).
+    ///  3. ERA: movies from the same wave (early-90s hood cinema, late-90s reality sci-fi)
+    ///     get a modest proximity bonus.
+    ///  4. GENRES: weak background evidence only, rarity-weighted and demoted, so "also
+    ///     Action" can never outvote a real subcategory or lineage match.
+    ///
+    /// Rating only breaks ties. Watched items excluded. Duplicate copies collapsed.
+    /// All scoring happens in code; Jellyfin's query-level genre/tag filters are not
+    /// trusted (their semantics are inconsistent on 10.11).
     /// </summary>
     public class RecommendationEngine
     {
         private const int PoolLimit = 5000;
+        private const int PeopleStageCandidates = 64;
+
+        private const double TagBoost = 1.5;
+        private const double GenreDemotion = 0.5;
+        private const double SharedDirectorBonus = 4.0;
+        private const double SharedWriterBonus = 3.0;
+
+        /// <summary>
+        /// Mood adjectives and metadata debris that must never count as similarity.
+        /// Users can extend this via the IgnoredTags plugin setting.
+        /// </summary>
+        private static readonly HashSet<string> JunkTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "admiring", "adoring", "affectation", "aggressive", "ambivalent", "amused",
+            "angry", "antagonistic", "anxious", "approving", "assertive", "audacious",
+            "bitter", "bold", "calm", "candid", "celebratory", "cheerful", "complicated",
+            "critical", "desperate", "detached", "dramatic", "eerie", "empathetic",
+            "excited", "exuberant", "frantic", "frightened", "gentle", "grim", "happy",
+            "hopeful", "inflammatory", "intense", "joyful", "melancholic", "moody",
+            "playful", "provocative", "relaxed", "sad", "sardonic", "scary", "shocking",
+            "suspenseful", "sympathetic", "tense", "uplifting", "vexed",
+            "duringcreditsstinger", "aftercreditsstinger"
+        };
 
         private readonly ILibraryManager _libraryManager;
 
@@ -47,6 +77,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         {
             int maxItems = Math.Max(1, config.MaxItems);
             bool hideWatched = config.HideWatched;
+            HashSet<string> ignored = BuildIgnoredTags(config);
 
             IReadOnlyList<BaseItem> pool = _libraryManager.GetItemList(new InternalItemsQuery(user)
             {
@@ -57,8 +88,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 Limit = PoolLimit
             });
 
-            // Inverse-frequency weights over the library: rare genres/tags are informative,
-            // ubiquitous ones are nearly worthless as similarity signals.
+            // Library-wide rarity census (junk tags excluded entirely).
             Dictionary<string, int> genreFreq = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, int> tagFreq = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (BaseItem item in pool)
@@ -70,13 +100,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched
 
                 foreach (string t in item.Tags)
                 {
-                    tagFreq[t] = tagFreq.TryGetValue(t, out int c) ? c + 1 : 1;
+                    if (!ignored.Contains(t))
+                    {
+                        tagFreq[t] = tagFreq.TryGetValue(t, out int c) ? c + 1 : 1;
+                    }
                 }
             }
 
             double total = Math.Max(pool.Count, 1);
             HashSet<string> seedGenres = new HashSet<string>(seed.Genres, StringComparer.OrdinalIgnoreCase);
-            HashSet<string> seedTags = new HashSet<string>(seed.Tags, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> seedTags = new HashSet<string>(
+                seed.Tags.Where(t => !ignored.Contains(t)), StringComparer.OrdinalIgnoreCase);
+            int? seedYear = seed.ProductionYear;
 
             List<(BaseItem Item, double Score)> scored = new List<(BaseItem, double)>();
             List<BaseItem> fallback = new List<BaseItem>();
@@ -89,23 +124,40 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 }
 
                 double score = 0;
-                foreach (string g in item.Genres)
-                {
-                    if (seedGenres.Contains(g) && genreFreq.TryGetValue(g, out int f))
-                    {
-                        // 0.1 floor so even a library-wide genre still counts a little.
-                        score += 0.1 + Math.Log(total / f);
-                    }
-                }
 
+                // Signal 1: content tags (subcategories) — strongest metadata signal.
                 foreach (string t in item.Tags)
                 {
                     if (seedTags.Contains(t) && tagFreq.TryGetValue(t, out int f))
                     {
-                        // Tags are the sub-categories (slasher, heist, satire...) and the
-                        // strongest similarity signal: rarity-weighted AND boosted 1.5x
-                        // so subcategory overlap outranks broad genre overlap.
-                        score += 1.5 * (0.1 + Math.Log(total / f));
+                        score += TagBoost * (0.1 + Math.Log(total / f));
+                    }
+                }
+
+                // Signal 4: genres — weak background evidence, demoted.
+                foreach (string g in item.Genres)
+                {
+                    if (seedGenres.Contains(g) && genreFreq.TryGetValue(g, out int f))
+                    {
+                        score += GenreDemotion * (0.1 + Math.Log(total / f));
+                    }
+                }
+
+                // Signal 3: era proximity — only when there's already a real connection.
+                if (score > 0 && seedYear.HasValue && item.ProductionYear.HasValue)
+                {
+                    int diff = Math.Abs(seedYear.Value - item.ProductionYear.Value);
+                    if (diff <= 3)
+                    {
+                        score += 1.5;
+                    }
+                    else if (diff <= 7)
+                    {
+                        score += 1.0;
+                    }
+                    else if (diff <= 12)
+                    {
+                        score += 0.5;
                     }
                 }
 
@@ -116,6 +168,36 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 else
                 {
                     fallback.Add(item);
+                }
+            }
+
+            // Signal 2: people. Shared directors/writers are a strong tie. Only computed
+            // for the top candidates to keep this cheap on big libraries.
+            (HashSet<string> SeedDirectors, HashSet<string> SeedWriters) seedPeople = GetKeyPeople(seed);
+            if (seedPeople.SeedDirectors.Count > 0 || seedPeople.SeedWriters.Count > 0)
+            {
+                List<(BaseItem Item, double Score)> top = scored
+                    .OrderByDescending(x => x.Score)
+                    .Take(PeopleStageCandidates)
+                    .ToList();
+
+                Dictionary<Guid, double> bonuses = new Dictionary<Guid, double>();
+                foreach ((BaseItem item, double _) in top)
+                {
+                    (HashSet<string> dirs, HashSet<string> writers) = GetKeyPeople(item);
+                    double bonus = dirs.Count(d => seedPeople.SeedDirectors.Contains(d)) * SharedDirectorBonus
+                                 + writers.Count(w => seedPeople.SeedWriters.Contains(w)) * SharedWriterBonus;
+                    if (bonus > 0)
+                    {
+                        bonuses[item.Id] = bonus;
+                    }
+                }
+
+                if (bonuses.Count > 0)
+                {
+                    scored = scored
+                        .Select(x => bonuses.TryGetValue(x.Item.Id, out double b) ? (x.Item, x.Score + b) : x)
+                        .ToList();
                 }
             }
 
@@ -131,7 +213,6 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     break;
                 }
 
-                // Collapse duplicate copies of the same movie.
                 string key = $"{item.Name}|{item.ProductionYear}";
                 if (seenTitles.Add(key))
                 {
@@ -139,7 +220,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 }
             }
 
-            // Backfill with the best-rated remaining picks so a row is never one weak entry.
+            // Backfill with best-rated remaining picks so a row is never one weak entry.
             if (result.Count < Math.Max(config.MinItemsPerRow, 1))
             {
                 foreach (BaseItem item in fallback.OrderByDescending(i => i.CommunityRating ?? 0))
@@ -160,6 +241,55 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             return result;
         }
 
+        private static HashSet<string> BuildIgnoredTags(PluginConfiguration config)
+        {
+            HashSet<string> ignored = new HashSet<string>(JunkTags, StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(config.IgnoredTags))
+            {
+                foreach (string t in config.IgnoredTags.Split(','))
+                {
+                    string trimmed = t.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        ignored.Add(trimmed);
+                    }
+                }
+            }
+
+            return ignored;
+        }
+
+        private (HashSet<string> SeedDirectors, HashSet<string> SeedWriters) GetKeyPeople(BaseItem item)
+        {
+            HashSet<string> directors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> writers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (PersonInfo p in _libraryManager.GetPeople(item))
+                {
+                    if (string.IsNullOrWhiteSpace(p.Name))
+                    {
+                        continue;
+                    }
+
+                    if (p.Type == PersonKind.Director)
+                    {
+                        directors.Add(p.Name);
+                    }
+                    else if (p.Type == PersonKind.Writer)
+                    {
+                        writers.Add(p.Name);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // People lookup failing must never break the row.
+            }
+
+            return (directors, writers);
+        }
+
         private static bool SafeIsPlayed(BaseItem item, User user)
         {
             try
@@ -168,7 +298,6 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             }
             catch (Exception)
             {
-                // If user data can't be read, treat as unwatched rather than dropping it.
                 return false;
             }
         }
