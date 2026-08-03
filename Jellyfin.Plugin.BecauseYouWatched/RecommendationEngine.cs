@@ -22,8 +22,10 @@ namespace Jellyfin.Plugin.BecauseYouWatched
     ///     The Animatrix and V for Vendetta).
     ///  3. ERA: movies from the same wave (early-90s hood cinema, late-90s reality sci-fi)
     ///     get a modest proximity bonus.
-    ///  4. GENRES: weak background evidence only, rarity-weighted and demoted, so "also
-    ///     Action" can never outvote a real subcategory or lineage match.
+    ///  4. GENRES: weak background evidence for RANKING, but a hard GATE for eligibility:
+    ///     a candidate sharing zero genres with the seed is out entirely — tone first,
+    ///     theme second ("a comedy about making a movie is not a rec for a drama about
+    ///     making a movie").
     ///
     /// Rating only breaks ties. Watched items excluded. Duplicate copies collapsed.
     /// All scoring happens in code; Jellyfin's query-level genre/tag filters are not
@@ -116,10 +118,28 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             List<(BaseItem Item, double Score)> scored = new List<(BaseItem, double)>();
             List<BaseItem> fallback = new List<BaseItem>();
 
+            string seedKey = $"{seed.Name}|{seed.ProductionYear}";
+
             foreach (BaseItem item in pool)
             {
                 if (hideWatched && SafeIsPlayed(item, user))
                 {
+                    continue;
+                }
+
+                // A duplicate copy of the seed itself must never appear in its own row.
+                if (string.Equals($"{item.Name}|{item.ProductionYear}", seedKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // TONE GATE: theme only counts between movies that agree on what KIND of
+                // movie they are. Zero shared genres = ineligible, no matter how many
+                // thematic tags overlap (a comedy about making a movie is not a rec for
+                // a drama about making a movie).
+                if (!item.Genres.Any(g => seedGenres.Contains(g)))
+                {
+                    fallback.Add(item);
                     continue;
                 }
 
