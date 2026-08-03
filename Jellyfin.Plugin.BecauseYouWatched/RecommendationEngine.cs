@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Data.Enums;
@@ -7,6 +8,7 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.BecauseYouWatched.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
@@ -36,6 +38,16 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         private const int PoolLimit = 5000;
         private const int PeopleStageCandidates = 64;
 
+        /// <summary>
+        /// Per-seed results are cached briefly so home screen refreshes and the playlist
+        /// task don't re-scan the library for the same answer. Config changes take effect
+        /// within this window at the latest.
+        /// </summary>
+        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
+
+        private static readonly ConcurrentDictionary<string, (DateTime Built, IReadOnlyList<BaseItem> Items)> Cache =
+            new ConcurrentDictionary<string, (DateTime, IReadOnlyList<BaseItem>)>();
+
         private const double TagBoost = 1.5;
         private const double GenreDemotion = 0.5;
         private const double SharedDirectorBonus = 4.0;
@@ -59,13 +71,15 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         };
 
         private readonly ILibraryManager _libraryManager;
+        private readonly ILogger? _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RecommendationEngine"/> class.
         /// </summary>
-        public RecommendationEngine(ILibraryManager libraryManager)
+        public RecommendationEngine(ILibraryManager libraryManager, ILogger? logger = null)
         {
             _libraryManager = libraryManager;
+            _logger = logger;
         }
 
         /// <summary>
@@ -77,6 +91,13 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         /// <returns>Ranked similar movies, capped to the configured row size.</returns>
         public IReadOnlyList<BaseItem> GetSimilarTo(User user, BaseItem seed, PluginConfiguration config)
         {
+            string cacheKey = $"{user.Id:N}|{seed.Id:N}";
+            if (Cache.TryGetValue(cacheKey, out (DateTime Built, IReadOnlyList<BaseItem> Items) hit)
+                && DateTime.UtcNow - hit.Built < CacheTtl)
+            {
+                return hit.Items;
+            }
+
             int maxItems = Math.Max(1, config.MaxItems);
             bool hideWatched = config.HideWatched;
             HashSet<string> ignored = BuildIgnoredTags(config);
@@ -116,13 +137,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             int? seedYear = seed.ProductionYear;
 
             List<(BaseItem Item, double Score)> scored = new List<(BaseItem, double)>();
-            List<BaseItem> fallback = new List<BaseItem>();
+
+            // Backfill pool: candidates that share at least one genre with the seed but
+            // scored zero. Zero-shared-genre candidates are NEVER eligible, not even as
+            // backfill: the tone gate is absolute.
+            List<BaseItem> sameGenreFallback = new List<BaseItem>();
 
             string seedKey = $"{seed.Name}|{seed.ProductionYear}";
+            int playedCheckFailures = 0;
 
             foreach (BaseItem item in pool)
             {
-                if (hideWatched && SafeIsPlayed(item, user))
+                if (hideWatched && SafeIsPlayed(item, user, ref playedCheckFailures))
                 {
                     continue;
                 }
@@ -139,7 +165,6 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 // a drama about making a movie).
                 if (!item.Genres.Any(g => seedGenres.Contains(g)))
                 {
-                    fallback.Add(item);
                     continue;
                 }
 
@@ -187,8 +212,15 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 }
                 else
                 {
-                    fallback.Add(item);
+                    sameGenreFallback.Add(item);
                 }
+            }
+
+            if (playedCheckFailures > 0)
+            {
+                _logger?.LogWarning(
+                    "Because You Watched: watched-state check failed for {Count} items (treated as unwatched); watched titles may reappear in rows.",
+                    playedCheckFailures);
             }
 
             // Signal 2: people. Shared directors/writers are a strong tie. Only computed
@@ -240,10 +272,11 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                 }
             }
 
-            // Backfill with best-rated remaining picks so a row is never one weak entry.
+            // Backfill with best-rated SAME-GENRE picks so a row is never one weak entry.
+            // The tone gate still applies here: zero-shared-genre titles never backfill.
             if (result.Count < Math.Max(config.MinItemsPerRow, 1))
             {
-                foreach (BaseItem item in fallback.OrderByDescending(i => i.CommunityRating ?? 0))
+                foreach (BaseItem item in sameGenreFallback.OrderByDescending(i => i.CommunityRating ?? 0))
                 {
                     if (result.Count >= Math.Max(config.MinItemsPerRow, 1))
                     {
@@ -255,6 +288,18 @@ namespace Jellyfin.Plugin.BecauseYouWatched
                     {
                         result.Add(item);
                     }
+                }
+            }
+
+            Cache[cacheKey] = (DateTime.UtcNow, result);
+            if (Cache.Count > 512)
+            {
+                foreach (string staleKey in Cache
+                    .Where(kv => DateTime.UtcNow - kv.Value.Built >= CacheTtl)
+                    .Select(kv => kv.Key)
+                    .ToList())
+                {
+                    Cache.TryRemove(staleKey, out _);
                 }
             }
 
@@ -310,7 +355,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             return (directors, writers);
         }
 
-        private static bool SafeIsPlayed(BaseItem item, User user)
+        private static bool SafeIsPlayed(BaseItem item, User user, ref int failures)
         {
             try
             {
@@ -318,6 +363,9 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             }
             catch (Exception)
             {
+                // Fail open (treat as unwatched) so one bad item can't blank the row;
+                // the caller logs how often this happened.
+                failures++;
                 return false;
             }
         }

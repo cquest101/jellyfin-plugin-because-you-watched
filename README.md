@@ -83,6 +83,10 @@ You can also grab the zip from [Releases](../../releases) and drop it into your 
 | Ignored tags | blank | Extra tags (comma-separated) to exclude from scoring, on top of the built-in mood-tag filter. |
 | Standalone playlist | on | Also maintain the per-user playlist so the plugin works without Home Screen Sections. |
 
+### Multi-user servers
+
+The home rows are shared sections: they're named from one account's watch history (the **Primary user**). On a household server, set **Primary user** explicitly so one person's recent watches don't title the rows for everyone, and so the driving account doesn't silently switch whenever someone else finishes a movie. Watched-filtering inside each row is always per the viewing user. The standalone playlist is fully per-user either way.
+
 ## Tips for good results
 
 The engine is only as good as your metadata. If a row looks off:

@@ -37,10 +37,11 @@ namespace Jellyfin.Plugin.BecauseYouWatched
 
         /// <inheritdoc />
         public override string Description =>
-            "Real 'Because You Watched' recommendations. Uses Jellyfin's working similarity engine "
-            + "(the one behind /Items/Similar) instead of the broken recommendations endpoint, blends "
-            + "your recent watches, hides what you've already seen, and backfills thin results so a row "
-            + "is never one weak pick. Renders through the Home Screen Sections plugin.";
+            "One home screen row per movie you recently watched, filled with genuinely similar "
+            + "titles from your own library. Four-signal scoring engine (rarity-weighted tags, "
+            + "genres, shared directors/writers, era) with a tone gate and mood-tag filter. "
+            + "Watched titles hidden, rows follow your history. Rows render through the Home "
+            + "Screen Sections plugin; standalone playlist mode needs no other plugins.";
 
         /// <inheritdoc />
         public IEnumerable<PluginPageInfo> GetPages()

@@ -22,6 +22,13 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Startup
     /// </summary>
     public class RebuildPlaylistsTask : IScheduledTask, IConfigurableScheduledTask
     {
+        /// <summary>
+        /// Marker tag identifying the playlist this plugin owns. The playlist is found by
+        /// this tag, never by name, so a user's own playlist that happens to share the
+        /// configured title is never touched.
+        /// </summary>
+        private const string ManagedPlaylistTag = "byw-managed";
+
         private readonly IUserManager _userManager;
         private readonly ILibraryManager _libraryManager;
         private readonly IPlaylistManager _playlistManager;
@@ -87,7 +94,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Startup
             }
 
             string title = string.IsNullOrWhiteSpace(config.RowTitle) ? "Because You Watched" : config.RowTitle;
-            RecommendationEngine engine = new RecommendationEngine(_libraryManager);
+            RecommendationEngine engine = new RecommendationEngine(_libraryManager, _logger);
 
             List<User> users = _userManager.GetUsers().ToList();
             for (int i = 0; i < users.Count; i++)
@@ -116,24 +123,39 @@ namespace Jellyfin.Plugin.BecauseYouWatched.Startup
         {
             Guid[] ids = recs.Select(r => r.Id).ToArray();
 
+            // Only ever touch the playlist carrying our marker tag. Matching by name is
+            // unsafe: it would clear a user's own playlist that shares the title.
             Playlist? existing = _playlistManager.GetPlaylists(user.Id)
-                .FirstOrDefault(p => string.Equals(p.Name, title, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(p => p.Tags.Contains(ManagedPlaylistTag, StringComparer.OrdinalIgnoreCase));
 
             if (existing is not null)
             {
-                // Clear it so the refresh is a replace, not an append.
+                // Follow a RowTitle change, then replace (not append) the contents.
+                existing.Name = title;
                 existing.LinkedChildren = Array.Empty<LinkedChild>();
                 await existing.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
                 await _playlistManager.AddItemToPlaylistAsync(existing.Id, ids, user.Id).ConfigureAwait(false);
             }
             else
             {
-                await _playlistManager.CreatePlaylist(new PlaylistCreationRequest
+                PlaylistCreationResult created = await _playlistManager.CreatePlaylist(new PlaylistCreationRequest
                 {
                     Name = title,
                     UserId = user.Id,
                     ItemIdList = ids
                 }).ConfigureAwait(false);
+
+                // Stamp the marker tag so future runs recognise the playlist as ours.
+                if (Guid.TryParse(created.Id, out Guid playlistId)
+                    && _libraryManager.GetItemById(playlistId) is Playlist createdPlaylist)
+                {
+                    createdPlaylist.Tags = createdPlaylist.Tags.Append(ManagedPlaylistTag).ToArray();
+                    await createdPlaylist.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    _logger.LogWarning("Because You Watched: could not tag the created playlist ({Id}); the next run will create a new one.", created.Id);
+                }
             }
         }
     }

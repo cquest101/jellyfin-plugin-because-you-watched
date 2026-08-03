@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.BecauseYouWatched
 {
@@ -24,6 +25,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         private readonly IUserManager _userManager;
         private readonly ILibraryManager _libraryManager;
         private readonly IDtoService _dtoService;
+        private readonly ILogger<BecauseYouWatchedResults> _logger;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BecauseYouWatchedResults"/> class.
@@ -31,11 +33,13 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         public BecauseYouWatchedResults(
             IUserManager userManager,
             ILibraryManager libraryManager,
-            IDtoService dtoService)
+            IDtoService dtoService,
+            ILogger<BecauseYouWatchedResults> logger)
         {
             _userManager = userManager;
             _libraryManager = libraryManager;
             _dtoService = dtoService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -52,7 +56,7 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             }
 
             PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
-            RecommendationEngine engine = new RecommendationEngine(_libraryManager);
+            RecommendationEngine engine = new RecommendationEngine(_libraryManager, _logger);
 
             IReadOnlyList<BaseItem> items;
             if (Guid.TryParse(payload.AdditionalData, out Guid seedId)
