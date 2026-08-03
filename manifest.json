@@ -9,12 +9,12 @@
         "imageUrl": "",
         "versions": [
             {
-                "version": "1.0.0.0",
+                "version": "1.1.5.0",
                 "changelog": "1.1.4: tone gate + self-duplicate fix. Per-movie named home rows with four-signal scoring.",
                 "targetAbi": "10.11.0.0",
-                "sourceUrl": "https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases/download/v1.1.4.0/because-you-watched_1.1.4.0.zip",
-                "checksum": "9b7f074b6fe034d37f5b7af9acf14f62",
-                "timestamp": "2026-08-03T05:02:59.0000000Z"
+                "sourceUrl": "https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases/download/v1.1.5.0/because-you-watched_1.1.5.0.zip",
+                "checksum": "bc7ea127b26803ea9fb655f5aaf480e7",
+                "timestamp": "2026-08-03T05:24:55.0000000Z"
             }
         ]
     }
