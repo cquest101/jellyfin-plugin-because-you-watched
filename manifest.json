@@ -12,9 +12,9 @@
                 "version": "1.0.0.0",
                 "changelog": "Initial release. Real similarity-based row, multi-seed blending, watched filtering, same-genre backfill.",
                 "targetAbi": "10.11.0.0",
-                "sourceUrl": "https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases/download/v1.0.0.0/because-you-watched_1.0.0.0.zip",
-                "checksum": "__MD5_FROM_RELEASE__",
-                "timestamp": "2026-08-02T00:00:00.0000000Z"
+                "sourceUrl": "https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases/download/v1.1.3.0/because-you-watched_1.1.3.0.zip",
+                "checksum": "d3fa2adcb3d5302509c77bf8db91c152",
+                "timestamp": "2026-08-03T04:47:56.0000000Z"
             }
         ]
     }
