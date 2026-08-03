@@ -12,13 +12,20 @@ namespace Jellyfin.Plugin.BecauseYouWatched
 {
     /// <summary>
     /// The brain, shared by the home-screen rows and the standalone playlist task.
-    /// Single-seed mode powers the per-movie "Because You Watched X" rows; blended mode
-    /// powers the playlist. Both use the same matching the server's /Items/Similar endpoint
-    /// uses in 10.11 (shared genres and tags), ranked deterministically instead of shuffled,
-    /// with watched items hidden and thin results backfilled by top-rated same-genre picks.
+    ///
+    /// Ranking is weighted-overlap, computed entirely in code (Jellyfin's query-level
+    /// genre/tag filters have inconsistent semantics across 10.11, so they are not
+    /// trusted for ranking):
+    ///  - sharing a RARE genre or tag with the seed scores high; sharing a huge genre
+    ///    (e.g. Action in an action-heavy library) scores low  (inverse-frequency weight)
+    ///  - matches stack: a movie sharing BOTH of a seed's genres beats one sharing one
+    ///  - community rating only breaks ties, it never drives the ranking
+    ///  - watched items are excluded, duplicate copies of the same movie are collapsed
     /// </summary>
     public class RecommendationEngine
     {
+        private const int PoolLimit = 5000;
+
         private readonly ILibraryManager _libraryManager;
 
         /// <summary>
@@ -39,90 +46,131 @@ namespace Jellyfin.Plugin.BecauseYouWatched
         public IReadOnlyList<BaseItem> GetSimilarTo(User user, BaseItem seed, PluginConfiguration config)
         {
             int maxItems = Math.Max(1, config.MaxItems);
-            bool? excludeWatched = config.HideWatched ? false : (bool?)null;
+            bool hideWatched = config.HideWatched;
 
-            Dictionary<Guid, BaseItem> pool = new Dictionary<Guid, BaseItem>();
-
-            // IMPORTANT: this query mirrors the server's own /Items/Similar endpoint
-            // field-for-field. Adding Recursive/IsPlayed to it silently DISABLES the
-            // genre/tag filtering on 10.11 and you get top-rated-anything back (the
-            // exact failure mode of home-sections issue #243). Watched-filtering and
-            // ranking are done in code below instead.
-            if (seed.Genres.Length > 0 || seed.Tags.Length > 0)
+            IReadOnlyList<BaseItem> pool = _libraryManager.GetItemList(new InternalItemsQuery(user)
             {
-                IReadOnlyList<BaseItem> similar = _libraryManager.GetItemList(new InternalItemsQuery(user)
-                {
-                    Genres = seed.Genres,
-                    Tags = seed.Tags,
-                    IncludeItemTypes = new[] { BaseItemKind.Movie },
-                    EnableTotalRecordCount = false,
-                    EnableGroupByMetadataKey = true,
-                    ExcludeItemIds = new[] { seed.Id },
-                    OrderBy = new[] { (ItemSortBy.Random, SortOrder.Ascending) },
-                    Limit = maxItems * 4
-                });
+                IncludeItemTypes = new[] { BaseItemKind.Movie },
+                EnableTotalRecordCount = false,
+                EnableGroupByMetadataKey = true,
+                ExcludeItemIds = new[] { seed.Id },
+                Limit = PoolLimit
+            });
 
-                foreach (BaseItem item in similar)
+            // Inverse-frequency weights over the library: rare genres/tags are informative,
+            // ubiquitous ones are nearly worthless as similarity signals.
+            Dictionary<string, int> genreFreq = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> tagFreq = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (BaseItem item in pool)
+            {
+                foreach (string g in item.Genres)
                 {
-                    if (Keep(item, seed, user, excludeWatched))
+                    genreFreq[g] = genreFreq.TryGetValue(g, out int c) ? c + 1 : 1;
+                }
+
+                foreach (string t in item.Tags)
+                {
+                    tagFreq[t] = tagFreq.TryGetValue(t, out int c) ? c + 1 : 1;
+                }
+            }
+
+            double total = Math.Max(pool.Count, 1);
+            HashSet<string> seedGenres = new HashSet<string>(seed.Genres, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> seedTags = new HashSet<string>(seed.Tags, StringComparer.OrdinalIgnoreCase);
+
+            List<(BaseItem Item, double Score)> scored = new List<(BaseItem, double)>();
+            List<BaseItem> fallback = new List<BaseItem>();
+
+            foreach (BaseItem item in pool)
+            {
+                if (hideWatched && SafeIsPlayed(item, user))
+                {
+                    continue;
+                }
+
+                double score = 0;
+                foreach (string g in item.Genres)
+                {
+                    if (seedGenres.Contains(g) && genreFreq.TryGetValue(g, out int f))
                     {
-                        pool[item.Id] = item;
+                        // 0.1 floor so even a library-wide genre still counts a little.
+                        score += 0.1 + Math.Log(total / f);
+                    }
+                }
+
+                foreach (string t in item.Tags)
+                {
+                    if (seedTags.Contains(t) && tagFreq.TryGetValue(t, out int f))
+                    {
+                        // Tags are the sub-categories (slasher, heist, satire...) and the
+                        // strongest similarity signal: rarity-weighted AND boosted 1.5x
+                        // so subcategory overlap outranks broad genre overlap.
+                        score += 1.5 * (0.1 + Math.Log(total / f));
+                    }
+                }
+
+                if (score > 0)
+                {
+                    scored.Add((item, score));
+                }
+                else
+                {
+                    fallback.Add(item);
+                }
+            }
+
+            List<BaseItem> result = new List<BaseItem>();
+            HashSet<string> seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((BaseItem item, double _) in scored
+                .OrderByDescending(x => x.Score)
+                .ThenByDescending(x => x.Item.CommunityRating ?? 0))
+            {
+                if (result.Count >= maxItems)
+                {
+                    break;
+                }
+
+                // Collapse duplicate copies of the same movie.
+                string key = $"{item.Name}|{item.ProductionYear}";
+                if (seenTitles.Add(key))
+                {
+                    result.Add(item);
+                }
+            }
+
+            // Backfill with the best-rated remaining picks so a row is never one weak entry.
+            if (result.Count < Math.Max(config.MinItemsPerRow, 1))
+            {
+                foreach (BaseItem item in fallback.OrderByDescending(i => i.CommunityRating ?? 0))
+                {
+                    if (result.Count >= Math.Max(config.MinItemsPerRow, 1))
+                    {
+                        break;
+                    }
+
+                    string key = $"{item.Name}|{item.ProductionYear}";
+                    if (seenTitles.Add(key))
+                    {
+                        result.Add(item);
                     }
                 }
             }
 
-            // Genre-only backfill so the row is never one weak pick.
-            if (pool.Count < Math.Max(config.MinItemsPerRow, 1) && seed.Genres.Length > 0)
-            {
-                IReadOnlyList<BaseItem> backfill = _libraryManager.GetItemList(new InternalItemsQuery(user)
-                {
-                    Genres = seed.Genres,
-                    IncludeItemTypes = new[] { BaseItemKind.Movie },
-                    EnableTotalRecordCount = false,
-                    EnableGroupByMetadataKey = true,
-                    ExcludeItemIds = new[] { seed.Id },
-                    OrderBy = new[] { (ItemSortBy.Random, SortOrder.Ascending) },
-                    Limit = maxItems * 4
-                });
-
-                foreach (BaseItem item in backfill)
-                {
-                    if (!pool.ContainsKey(item.Id) && Keep(item, seed, user, excludeWatched))
-                    {
-                        pool[item.Id] = item;
-                    }
-                }
-            }
-
-            return pool.Values
-                .OrderByDescending(i => i.CommunityRating ?? 0)
-                .Take(maxItems)
-                .ToList();
+            return result;
         }
 
-        private static bool Keep(BaseItem item, BaseItem seed, User user, bool? excludeWatched)
+        private static bool SafeIsPlayed(BaseItem item, User user)
         {
-            if (item.Id == seed.Id)
+            try
             {
+                return item.IsPlayed(user, null!);
+            }
+            catch (Exception)
+            {
+                // If user data can't be read, treat as unwatched rather than dropping it.
                 return false;
             }
-
-            if (excludeWatched == false)
-            {
-                try
-                {
-                    if (item.IsPlayed(user, null!))
-                    {
-                        return false;
-                    }
-                }
-                catch (Exception)
-                {
-                    // If user data can't be read, keep the item rather than drop it.
-                }
-            }
-
-            return true;
         }
 
         /// <summary>
@@ -165,20 +213,23 @@ namespace Jellyfin.Plugin.BecauseYouWatched
             for (int s = 0; s < seeds.Count; s++)
             {
                 double seedWeight = 1.0 / (s + 1);
-                foreach (BaseItem item in GetSimilarTo(user, seeds[s], config))
+                IReadOnlyList<BaseItem> similar = GetSimilarTo(user, seeds[s], config);
+                for (int rank = 0; rank < similar.Count; rank++)
                 {
+                    BaseItem item = similar[rank];
                     if (seedIds.Contains(item.Id))
                     {
                         continue;
                     }
 
+                    double add = seedWeight * (1.0 / (rank + 1));
                     if (scores.TryGetValue(item.Id, out double existing))
                     {
-                        scores[item.Id] = existing + seedWeight;
+                        scores[item.Id] = existing + add;
                     }
                     else
                     {
-                        scores[item.Id] = seedWeight;
+                        scores[item.Id] = add;
                         pool[item.Id] = item;
                     }
                 }
