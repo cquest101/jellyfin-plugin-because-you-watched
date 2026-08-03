@@ -46,12 +46,12 @@ jobs:
           cat > artifact/meta.json <<EOF
           {
             "category": "General",
-            "changelog": "Initial release.",
-            "description": "Real 'Because You Watched' recommendations using Jellyfin's working similarity engine.",
+            "changelog": "See https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases",
+            "description": "Real per-movie 'Because You Watched' home rows: one row per recent watch, filled with genuinely similar titles from your own library, ranked by a four-signal scoring engine (tags, genres, people, era).",
             "guid": "${GUID}",
             "name": "${PLUGIN_NAME}",
-            "overview": "Real 'Because You Watched' recommendations that actually match what you watched.",
-            "owner": "chris",
+            "overview": "Real per-movie 'Because You Watched' rows built from your own library.",
+            "owner": "cquest101",
             "targetAbi": "${TARGET_ABI}",
             "timestamp": "${TS}",
             "version": "${VERSION}"

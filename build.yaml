@@ -3,20 +3,25 @@ name: "Because You Watched"
 guid: "6c784ca1-2a6f-4132-af78-405582869670"
 version: "1.1.4.0"
 targetAbi: "10.11.0.0"
-framework: "net8.0"
-owner: "chris"
-overview: "Real 'Because You Watched' recommendations that actually match what you watched."
+framework: "net9.0"
+owner: "cquest101"
+overview: "Real per-movie 'Because You Watched' rows built from your own library."
 category: "General"
 description: >
-  Jellyfin's built-in recommendations endpoint is broken: the "Because you watched X"
-  row returns the same alphabetical list of your library for every title. This plugin
-  replaces it with real, similarity-scored picks built off what you actually watched,
-  using Jellyfin's own working similarity engine (the one behind /Items/Similar). It
-  blends your recent watches, hides what you've already seen, and backfills thin
-  results so a row is never a single weak pick. The row renders through the Home Screen
-  Sections plugin.
+  Jellyfin's built-in "Because you watched" suggestion returns the same
+  near-alphabetical slice of your library for every title. This plugin replaces it
+  with real per-movie home screen rows: one row per recent watch, named after that
+  movie, filled with genuinely similar titles from your library. A four-signal
+  scoring engine ranks candidates by shared subcategory tags (rarity-weighted),
+  genres, shared directors and writers, and era, with a tone gate that blocks
+  tag-only false matches and a filter for meaningless mood tags. Watched titles are
+  hidden, rows follow your history automatically, and thin rows are backfilled with
+  well-rated same-genre picks. Rows render through the Home Screen Sections plugin;
+  a standalone per-user playlist mode works with no other plugins installed.
 artifacts:
   - "Jellyfin.Plugin.BecauseYouWatched.dll"
 changelog: >
-  1.0.0.0 - Initial release. Real similarity-based "Because You Watched" row,
-  multi-seed blending, watched-item filtering, and same-genre backfill.
+  1.1.4.0 - Tone gate (zero shared genres = ineligible) and self-duplicate
+  exclusion. 1.1.3.0 - Junk mood-tag filter and IgnoredTags setting. 1.1.1.0 -
+  In-code four-signal scoring engine, per-movie named rows. 1.0.0.0 - Initial
+  release.

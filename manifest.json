@@ -2,15 +2,15 @@
     {
         "guid": "6c784ca1-2a6f-4132-af78-405582869670",
         "name": "Because You Watched",
-        "description": "Real 'Because You Watched' recommendations. Replaces Jellyfin's broken recommendations row with similarity-scored picks built from what you actually watched, using Jellyfin's own working similarity engine. Blends recent watches, hides watched items, and backfills thin results. Renders through the Home Screen Sections plugin.",
-        "overview": "Recommendations that actually match what you watched.",
-        "owner": "chris",
+        "description": "Real per-movie 'Because You Watched' home rows: one row per recent watch, named after that movie, filled with genuinely similar titles from your own library. Four-signal scoring engine (tags, genres, people, era) with a tone gate and mood-tag filter. Watched titles hidden, rows follow your history, standalone playlist mode needs no other plugins.",
+        "overview": "Real per-movie 'Because You Watched' rows built from your own library.",
+        "owner": "cquest101",
         "category": "General",
         "imageUrl": "",
         "versions": [
             {
                 "version": "1.0.0.0",
-                "changelog": "Initial release. Real similarity-based row, multi-seed blending, watched filtering, same-genre backfill.",
+                "changelog": "1.1.4: tone gate + self-duplicate fix. Per-movie named home rows with four-signal scoring.",
                 "targetAbi": "10.11.0.0",
                 "sourceUrl": "https://github.com/cquest101/jellyfin-plugin-because-you-watched/releases/download/v1.1.4.0/because-you-watched_1.1.4.0.zip",
                 "checksum": "9b7f074b6fe034d37f5b7af9acf14f62",
